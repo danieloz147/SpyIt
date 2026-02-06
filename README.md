@@ -7,18 +7,23 @@ Building a Beacon Object File (BOF) for adaptixC2/Cobalt Strike that enumerates 
 ```
 SpyIt/
 ├── Enum-Screens/
-│   └── Step1 Basic C usage/
-│       ├── enumerate_screens.c      # Simple C program
-│       └── compile.bat               # Build script
+│   ├── Step1_Basic_C_usage/
+│   │   ├── enumerate_screens.c      # Simple C program
+│   │   └── compile.bat              # Build EXE
+│   └── Step2_BOF-Conversion/
+│       ├── enumerate_screens.c      # BOF source (BeaconPrintf)
+│       ├── compile.bat              # Build BOF (x86+x64)
+│       ├── enum-screens.axs         # Adaptix AxScript command
+│       └── beacon.h                 # Adaptix beacon header
 ├── .gitignore
 └── README.md
 ```
 
 ---
 
-## 🚀 Step 1: Simple C Program (Current)
+## 🚀 Step 1: Simple C Program
 
-**Location:** `Enum-Screens/Step1 Basic C usage/`
+**Location:** `Enum-Screens/Step1_Basic_C_usage/`
 
 ### What it does:
 - ✅ Enumerates all display monitors using Windows API
@@ -31,7 +36,7 @@ SpyIt/
 
 ### How to build:
 ```cmd
-cd "Enum-Screens/Step1 Basic C usage"
+cd "Enum-Screens/Step1_Basic_C_usage"
 compile.bat
 ```
 
@@ -42,13 +47,11 @@ enumerate_screens.exe
 
 ### Example output:
 ```
-[+] Enumerating display monitors...
-[*] Monitor 1:
-    Resolution: 1920x1080
-    Position: (0, 0)
-    Primary: Yes
+[?] Enumerating display monitors...
+[+] Monitor 0 [PRIMARY]: Resolution: 1707x960
+[+] Monitor 1          : Resolution: 2293x960
 
-[+] Total screens detected: 1
+[!] Total screens detected: 2
 ```
 
 ### Key Windows API:
@@ -63,18 +66,30 @@ Uses **MSVC** (Visual Studio 2017) with:
 
 ---
 
-## 📝 Next Steps (Coming Soon [TBD])
+## ✅ Step 2: BOF Conversion (Current)
 
-### Step 2: BOF Conversion
-- Replace `printf()` with Beacon API (`BeaconPrintf`, `BeaconOutput`)
-- Buffer management for remote output
-- Requires `beacon.h` from adaptixC2 SDK
+**Location:** `Enum-Screens/Step2_BOF-Conversion/`
 
-### Step 3: Production BOF
-- Optimized Beacon API integration
-- Function pointer resolution
-- Ready for adaptixC2 deployment
-- Supports x64 and x86
+### What it does:
+- BOF version using `BeaconPrintf`
+- Adaptix AxScript command (`enum-screens`)
+- Builds both x64 and x86 object files
+
+### How to build:
+```cmd
+cd "Enum-Screens/Step2_BOF-Conversion"
+compile.bat
+```
+
+### Output files:
+- `enumerate_screens.x64.o`
+- `enumerate_screens.x86.o` (if x86 toolchain is available)
+
+### How to load in Adaptix:
+Load `enum-screens.axs` via AxScript → Script Manager, then run:
+```
+enum-screens
+```
 
 ---
 
@@ -93,17 +108,13 @@ Uses **MSVC** (Visual Studio 2017) with:
 
 ## 📚 Learning Path
 
-1. **Step 1** (Current): Understand Windows API basics
+1. **Step 1**: Understand Windows API basics
    - See how `EnumDisplayMonitors()` works
    - Test locally and observe output
 
-2. **Step 2** (Next): Learn Beacon API
+2. **Step 2** (Current): Learn Beacon API
    - Replace standard output with C2 callbacks
-   - Buffer management for remote execution
-
-3. **Step 3** (Final): Production BOF
-   - Optimize for C2 framework
-   - Deploy to adaptixC2
+   - Load and execute in Adaptix
 
 ---
 
@@ -136,8 +147,6 @@ This project uses MSVC, not GCC - make sure you're using the right compiler.
 - BOFs run in-process with minimal overhead
 - No spawned processes = better stealth
 - `.gitignore` excludes build artifacts (`*.exe`, `*.obj`, `*.dll`)
-- BOFs run in-process with minimal overhead
-- No spawned processes means better stealth
 - Limited to BeaconAPI functions (no full stdlib)
 - Must be x64 or x86 compiled (match target architecture)
 
