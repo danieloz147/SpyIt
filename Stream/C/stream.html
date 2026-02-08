@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="he">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live Stream</title>
+    <style>
+      :root {
+        --bg: #0b0f1a;
+        --panel: rgba(15, 20, 33, 0.75);
+        --panel-border: rgba(255, 255, 255, 0.08);
+        --text: #e8ecf3;
+        --muted: #a8b0c3;
+        --accent: #5b8cff;
+        --danger: #ff5b6a;
+        --warn: #f5c542;
+        --ok: #22c55e;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: var(--bg); color: var(--text); }
+      body { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; }
+
+      .app { width: 100%; height: 100%; display: grid; grid-template-rows: auto 1fr; }
+      .topbar {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 12px;
+        align-items: center;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--panel-border);
+        background: linear-gradient(180deg, rgba(15,20,33,0.9), rgba(15,20,33,0.6));
+        backdrop-filter: blur(10px);
+      }
+      .brand { font-weight: 600; letter-spacing: 0.3px; color: var(--text); }
+
+      .status-wrap {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        font-size: 13px;
+      }
+      .status .dot {
+        width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+        box-shadow: 0 0 8px rgba(0,0,0,0.4);
+      }
+      .status[data-state="live"] .dot { background: var(--ok); box-shadow: 0 0 10px rgba(34,197,94,0.8); }
+      .status[data-state="idle"] .dot { background: var(--warn); box-shadow: 0 0 10px rgba(245,197,66,0.6); }
+      .status[data-state="off"] .dot { background: var(--danger); box-shadow: 0 0 10px rgba(255,91,106,0.6); }
+
+      .controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        font-size: 13px;
+      }
+      .controls label { color: var(--muted); }
+      .controls select {
+        background: #0f1422; color: var(--text); border: 1px solid var(--panel-border);
+        border-radius: 8px; padding: 4px 8px; outline: none;
+      }
+      .controls button {
+        background: var(--accent); color: white; border: none; border-radius: 8px;
+        padding: 6px 10px; cursor: pointer; font-weight: 600;
+      }
+      .controls button.secondary { background: #2a3147; }
+      .controls button.danger { background: var(--danger); }
+      .controls button:hover { filter: brightness(1.05); }
+
+      .stage { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
+      .stream { max-width: 100vw; max-height: calc(100vh - 64px); border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.45); }
+
+      #overlay {
+        position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        color: #fff; background: rgba(0,0,0,0.65); font-size: 20px; font-weight: 600;
+        backdrop-filter: blur(4px);
+      }
+      #recBadge {
+        display: none; align-items: center; gap: 8px;
+        padding: 6px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; letter-spacing: 0.4px;
+        background: var(--panel); border: 1px solid var(--panel-border);
+      }
+      #recDot {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: var(--danger); box-shadow: 0 0 10px rgba(255, 91, 106, 0.9);
+        animation: pulse 1s infinite;
+      }
+      @keyframes pulse {
+        0% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.2); opacity: 0.5; }
+        100% { transform: scale(1); opacity: 1; }
+      }
+      #source { color: var(--muted); font-size: 12px; margin-left: 10px; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">SpyIt Live Stream <span id="source"></span></div>
+        <div class="status-wrap">
+          <div id="recBadge"><span id="recDot"></span>REC</div>
+          <div id="status" class="status" data-state="idle">
+            <span class="dot"></span>
+            <span class="text">Connecting...</span>
+          </div>
+        </div>
+        <div id="controls" class="controls">
+          <label for="screen">Screen</label>
+          <select id="screen"></select>
+          <button id="switchBtn">Switch</button>
+          <button id="recordBtn" class="secondary">Record</button>
+          <button id="terminateBtn" class="danger">Terminate</button>
+        </div>
+      </header>
+
+      <main class="stage">
+        <div id="overlay">Stream ended</div>
+        <img id="stream" class="stream" src="" alt="Live stream" crossorigin="anonymous" />
+        <canvas id="recCanvas" style="display:none;"></canvas>
+      </main>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const statusText = statusEl.querySelector('.text');
+      const overlayEl = document.getElementById('overlay');
+      const streamEl = document.getElementById('stream');
+      const recBadge = document.getElementById('recBadge');
+      const recCanvas = document.getElementById('recCanvas');
+      const sourceEl = document.getElementById('source');
+      const recordBtn = document.getElementById('recordBtn');
+      const urlParams = new URLSearchParams(window.location.search);
+      const port = urlParams.get('port') || '40484';
+      const baseUrl = 'http://127.0.0.1:' + port;
+
+      sourceEl.textContent = `(${baseUrl})`;
+
+      function setStatus(text, state) {
+        statusText.textContent = text;
+        statusEl.setAttribute('data-state', state);
+      }
+
+      function onStreamOk() {
+        setStatus('Live', 'live');
+        overlayEl.style.display = 'none';
+        streamEl.style.opacity = '1';
+        streamEl.style.display = 'block';
+      }
+
+      function onStreamError() {
+        setStatus('Disconnected', 'off');
+        overlayEl.style.display = 'flex';
+        streamEl.style.opacity = '0';
+        streamEl.style.display = 'none';
+      }
+
+      function switchScreen() {
+        const idx = Number(screenSelect.value);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= screenCount) {
+          return;
+        }
+        const s = document.createElement('script');
+        s.src = `${baseUrl}/switch.js?screen=${encodeURIComponent(idx)}&t=${Date.now()}`;
+        document.body.appendChild(s);
+        s.onload = () => s.remove();
+      }
+
+      function terminateApp() {
+        const s = document.createElement('script');
+        s.src = `${baseUrl}/terminate.js?t=${Date.now()}`;
+        document.body.appendChild(s);
+        s.onload = () => s.remove();
+      }
+
+      const screenSelect = document.getElementById('screen');
+      let screenCount = 0;
+
+      function buildScreens(count) {
+        screenSelect.innerHTML = '';
+        for (let i = 0; i < count; i++) {
+          const opt = document.createElement('option');
+          opt.value = String(i);
+          opt.textContent = String(i);
+          screenSelect.appendChild(opt);
+        }
+      }
+
+      window.__screens = (data) => {
+        const count = Number(data && data.count);
+        if (Number.isInteger(count) && count > 0) {
+          screenCount = count;
+          buildScreens(count);
+        }
+      };
+
+      const screensScript = document.createElement('script');
+      screensScript.src = `${baseUrl}/screens.js?t=${Date.now()}`;
+      document.body.appendChild(screensScript);
+      screensScript.onload = () => screensScript.remove();
+      document.getElementById('switchBtn').addEventListener('click', switchScreen);
+      document.getElementById('terminateBtn').addEventListener('click', terminateApp);
+
+      let recorder = null;
+      let recChunks = [];
+      let drawTimer = null;
+
+      function startRecording() {
+        if (recorder) return;
+        const ctx = recCanvas.getContext('2d');
+        recCanvas.width = streamEl.naturalWidth || 1280;
+        recCanvas.height = streamEl.naturalHeight || 720;
+
+        drawTimer = setInterval(() => {
+          try {
+            ctx.drawImage(streamEl, 0, 0, recCanvas.width, recCanvas.height);
+          } catch {
+            // ignore draw errors
+          }
+        }, 1000 / 15);
+
+        const stream = recCanvas.captureStream(15);
+        recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
+        recChunks = [];
+
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) recChunks.push(e.data);
+        };
+
+        recorder.onstop = async () => {
+          clearInterval(drawTimer);
+          drawTimer = null;
+          recBadge.style.display = 'none';
+
+          const blob = new Blob(recChunks, { type: 'video/webm' });
+          recChunks = [];
+
+          if (window.showSaveFilePicker) {
+            try {
+              const handle = await showSaveFilePicker({
+                suggestedName: `stream-${Date.now()}.webm`,
+                types: [{ description: 'WebM Video', accept: { 'video/webm': ['.webm'] } }]
+              });
+              const writable = await handle.createWritable();
+              await writable.write(blob);
+              await writable.close();
+              return;
+            } catch {
+              // fallback below
+            }
+          }
+
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `stream-${Date.now()}.webm`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        };
+
+        recorder.start(1000);
+        recBadge.style.display = 'inline-flex';
+        recordBtn.textContent = 'Recording';
+        recordBtn.classList.add('danger');
+      }
+
+      function stopRecording() {
+        if (!recorder) return;
+        recorder.stop();
+        recorder = null;
+        recordBtn.textContent = 'Record';
+        recordBtn.classList.remove('danger');
+      }
+
+      function toggleRecording() {
+        if (recorder) stopRecording();
+        else startRecording();
+      }
+
+      document.getElementById('recordBtn').addEventListener('click', toggleRecording);
+      function refreshStream() {
+        streamEl.src = `${baseUrl}/stream?t=${Date.now()}`;
+      }
+
+      streamEl.addEventListener('load', onStreamOk);
+      streamEl.addEventListener('error', onStreamError);
+
+      setInterval(refreshStream, 1000);
+      refreshStream();
+    </script>
+  </body>
+</html>

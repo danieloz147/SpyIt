@@ -1,92 +1,137 @@
-# Screen Enumeration BOF - Step by Step Guide
+# SpyIt
 
-Building a Beacon Object File (BOF) for adaptixC2/Cobalt Strike that enumerates display monitors. Start simple with C code, then convert to BOF format.
+Real-time desktop streaming tool for Windows. Captures the target's screen via DXGI Desktop Duplication and streams it as MJPEG over HTTP. Includes an HTML viewer with screen selection, recording, and remote control. Designed for use with [AdaptixC2](https://github.com/Adaptix-Framework/AdaptixC2) via an AxScript extension.
 
 ## 📁 Project Structure
 
 ```
 SpyIt/
+├── Stream/
+│   └── C/
+│       ├── Stream.c              # Desktop capture + MJPEG HTTP server
+│       ├── stream.html           # Browser-based stream viewer
+│       ├── compile.bat           # Build Stream.exe (MSVC)
+│       └── enum-screens.axs      # AdaptixC2 AxScript automation
 ├── Enum-Screens/
 │   ├── Step1_Basic_C_usage/
-│   │   ├── enumerate_screens.c      # Simple C program
-│   │   └── compile.bat              # Build EXE
+│   │   ├── enumerate_screens.c   # Simple monitor enumeration
+│   │   └── compile.bat
 │   └── Step2_BOF-Conversion/
-│       ├── enumerate_screens.c      # BOF source (BeaconPrintf)
-│       ├── compile.bat              # Build BOF (x86+x64)
-│       ├── enum-screens.axs         # Adaptix AxScript command
-│       └── beacon.h                 # Adaptix beacon header
+│       ├── enumerate_screens.c   # BOF version (BeaconPrintf)
+│       ├── compile.bat
+│       ├── enum-screens.axs      # Adaptix command for BOF
+│       └── beacon.h
 ├── .gitignore
 └── README.md
 ```
 
 ---
 
-## 🚀 Step 1: Simple C Program
+## 🎬 Stream - Desktop Capture & Stream
 
-**Location:** `Enum-Screens/Step1_Basic_C_usage/`
+**Location:** `Stream/C/`
 
-### What it does:
-- ✅ Enumerates all display monitors using Windows API
-- ✅ Shows resolution, position, and primary status
-- ✅ Standalone executable (no BOF yet)
+### Features
+- DXGI Desktop Duplication for low-overhead screen capture
+- WIC JPEG encoding → MJPEG stream over HTTP
+- Mouse cursor overlay (GDI)
+- Multi-monitor support with runtime screen switching
+- HTML viewer with screen selection, record (WebM), and terminate
+- Runs in background (detached process) by default
+- Dynamic port via `--port`
 
-### Files:
-- `enumerate_screens.c` - Source code
-- `compile.bat` - Build script
-
-### How to build:
+### How to build
 ```cmd
-cd "Enum-Screens/Step1_Basic_C_usage"
+cd "Stream\C"
 compile.bat
 ```
 
-### How to run:
+### How to run
 ```cmd
-enumerate_screens.exe
+Stream.exe                          # Default port 40484, background
+Stream.exe --port 8882              # Custom port, background
+Stream.exe --port 8882 --no-detach  # Custom port, keep console
+Stream.exe --logs-enable            # Enable logging to console
 ```
 
-### Example output:
+### How to view
+Open `stream.html` in a browser with the port as query parameter:
 ```
-[?] Enumerating display monitors...
-[+] Monitor 0 [PRIMARY]: Resolution: 1707x960
-[+] Monitor 1          : Resolution: 2293x960
-
-[!] Total screens detected: 2
+stream.html?port=40484
+```
+Or navigate directly to:
+```
+http://127.0.0.1:40484/
 ```
 
-### Key Windows API:
-- `EnumDisplayMonitors()` - Enumerate all monitors
-- `GetMonitorInfo()` - Get monitor details (resolution, position)
-- `MONITORINFO` structure - Store monitor data
+### HTTP Endpoints
+| Endpoint | Description |
+|---|---|
+| `/` | MJPEG video stream |
+| `/screens.js` | JSONP - number of available screens |
+| `/switch.js?screen=N` | JSONP - switch to screen N |
+| `/terminate.js` | JSONP - stop the server |
 
-### Compiler Setup:
-Uses **MSVC** (Visual Studio 2017) with:
-- `user32.lib` - Window and monitor APIs
-- `gdi32.lib` - Graphics device interface
+### Dependencies (MSVC)
+`user32.lib` `gdi32.lib` `dxgi.lib` `d3d11.lib` `windowscodecs.lib` `ws2_32.lib` `ole32.lib` `oleaut32.lib`
 
 ---
 
-## ✅ Step 2: BOF Conversion (Current)
+## 🤖 AdaptixC2 Integration
 
-**Location:** `Enum-Screens/Step2_BOF-Conversion/`
+**Extension file:** `Stream/C/enum-screens.axs`
 
-### What it does:
-- BOF version using `BeaconPrintf`
-- Adaptix AxScript command (`enum-screens`)
-- Builds both x64 and x86 object files
+Load the script in AdaptixC2 via **AxScript → Script Manager**, then use the following commands in any beacon console:
 
-### How to build:
-```cmd
-cd "Enum-Screens/Step2_BOF-Conversion"
-compile.bat
+### Commands
+
+| Command | Description |
+|---|---|
+| `spyit-check` | Verify Stream.exe and stream.html exist locally |
+| `spyit-upload <filename>` | Upload Stream.exe to `C:\Windows\Temp\<filename>` on target |
+| `spyit-start <filename> <port>` | Run SpyIt on target with the given port |
+| `spyit-connect <remote_port> [local_port]` | Create local port forward (server → target) |
+| `spyit-watch <local_port>` | Copy stream viewer URL to clipboard |
+| `spyit-terminate <filename> <port>` | Kill process, stop port forward, delete file |
+
+### Typical Workflow
+```
+spyit-check
+spyit-upload svchost.exe
+spyit-start svchost.exe 40484
+spyit-connect 40484
+spyit-watch 40484
+```
+Then paste the URL from clipboard into your browser.
+
+When done:
+```
+spyit-terminate svchost.exe 40484
 ```
 
-### Output files:
-- `enumerate_screens.x64.o`
-- `enumerate_screens.x86.o` (if x86 toolchain is available)
+---
 
-### How to load in Adaptix:
-Load `enum-screens.axs` via AxScript → Script Manager, then run:
+## 📖 Enum-Screens - BOF Learning Path
+
+**Location:** `Enum-Screens/`
+
+A step-by-step guide to building a Beacon Object File that enumerates display monitors.
+
+### Step 1: Simple C Program
+**`Enum-Screens/Step1_Basic_C_usage/`**
+
+Standalone EXE that uses `EnumDisplayMonitors()` and `GetMonitorInfo()` to list all monitors with resolution and position.
+
+```cmd
+cd "Enum-Screens\Step1_Basic_C_usage"
+compile.bat
+enumerate_screens.exe
+```
+
+### Step 2: BOF Conversion
+**`Enum-Screens/Step2_BOF-Conversion/`**
+
+BOF version using `BeaconPrintf` for output. Builds x64/x86 object files. Load `enum-screens.axs` in AdaptixC2, then run:
 ```
 enum-screens
 ```
@@ -95,59 +140,15 @@ enum-screens
 
 ## 🛠️ Requirements
 
-### Compiler:
-- **Visual Studio 2017+** (or Build Tools)
-- MSVC C/C++ compiler
+- **Visual Studio 2017+** Build Tools (MSVC)
 - Windows 10/11 SDK
-
-### Libraries:
-- `user32.lib` - For monitor enumeration
-- `gdi32.lib` - For device context
+- Windows target with Desktop Duplication support (Windows 8+)
 
 ---
 
-## 📚 Learning Path
+## 📚 References
 
-1. **Step 1**: Understand Windows API basics
-   - See how `EnumDisplayMonitors()` works
-   - Test locally and observe output
-
-2. **Step 2** (Current): Learn Beacon API
-   - Replace standard output with C2 callbacks
-   - Load and execute in Adaptix
-
----
-
-## 🐛 Troubleshooting
-
-### Compilation fails with "windows.h not found"
-Run the vcvars setup first:
-```cmd
-call "C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-```
-
-Or use the provided `compile.bat` which handles this automatically.
-
-### Missing DLL error (libgcc_s_dw2-1.dll)
-This project uses MSVC, not GCC - make sure you're using the right compiler.
-
----
-
-## 📖 References
-
+- [DXGI Desktop Duplication](https://docs.microsoft.com/en-us/windows/win32/direct3ddxgi/desktop-dup-api)
 - [Windows API - EnumDisplayMonitors](https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaymonitors)
-- [Windows API - MONITORINFO](https://docs.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-monitorinfo)
-- [Beacon Object Files - Cobalt Strike](https://www.cobaltstrike.com/help-beacon-object-files)
-- [adaptixC2](https://adaptix.dev)
-
----
-
-## 📝 Notes
-
-- BOFs run in-process with minimal overhead
-- No spawned processes = better stealth
-- `.gitignore` excludes build artifacts (`*.exe`, `*.obj`, `*.dll`)
-- Limited to BeaconAPI functions (no full stdlib)
-- Must be x64 or x86 compiled (match target architecture)
-
-Happy coding! 🚀
+- [AdaptixC2 Framework](https://github.com/Adaptix-Framework/AdaptixC2)
+- [AxScript Documentation](https://adaptix-framework.gitbook.io/adaptix-framework/development/axscript)
