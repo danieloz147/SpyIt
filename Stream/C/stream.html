@@ -5,34 +5,54 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Live Stream</title>
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
       :root {
-        --bg: #0b0f1a;
-        --panel: rgba(15, 20, 33, 0.75);
+        --bg: #0a0f1f;
+        --bg-2: #0f1b2d;
+        --panel: rgba(16, 24, 42, 0.7);
+        --panel-2: rgba(10, 14, 24, 0.75);
         --panel-border: rgba(255, 255, 255, 0.08);
-        --text: #e8ecf3;
-        --muted: #a8b0c3;
-        --accent: #5b8cff;
+        --text: #eef1f7;
+        --muted: #9aa5ba;
+        --accent: #41c1ba;
+        --accent-2: #4f8bff;
         --danger: #ff5b6a;
-        --warn: #f5c542;
-        --ok: #22c55e;
+        --warn: #f2b94b;
+        --ok: #28d17c;
+        --shadow: 0 20px 60px rgba(0,0,0,0.45);
       }
 
       * { box-sizing: border-box; }
       html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: var(--bg); color: var(--text); }
-      body { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; }
+      body {
+        font-family: "Space Grotesk", "Segoe UI", sans-serif;
+        background: radial-gradient(1200px 600px at 10% -10%, #1f3a60 0%, transparent 60%),
+                    radial-gradient(900px 500px at 90% 0%, #163a35 0%, transparent 55%),
+                    linear-gradient(180deg, var(--bg), var(--bg-2));
+      }
 
       .app { width: 100%; height: 100%; display: grid; grid-template-rows: auto 1fr; }
       .topbar {
         display: grid;
         grid-template-columns: 1fr auto auto;
-        gap: 12px;
+        gap: 14px;
         align-items: center;
-        padding: 14px 18px;
+        padding: 16px 22px;
         border-bottom: 1px solid var(--panel-border);
-        background: linear-gradient(180deg, rgba(15,20,33,0.9), rgba(15,20,33,0.6));
-        backdrop-filter: blur(10px);
+        background: linear-gradient(180deg, rgba(12,18,33,0.95), rgba(12,18,33,0.6));
+        backdrop-filter: blur(12px);
+        position: sticky; top: 0; z-index: 10;
       }
-      .brand { font-weight: 600; letter-spacing: 0.3px; color: var(--text); }
+      .brand {
+        font-weight: 700; letter-spacing: 0.6px; color: var(--text);
+        display: flex; align-items: center; gap: 10px;
+      }
+      .brand::before {
+        content: ""; width: 10px; height: 10px; border-radius: 3px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        box-shadow: 0 0 12px rgba(79,139,255,0.6);
+      }
 
       .status-wrap {
         display: inline-flex;
@@ -43,9 +63,9 @@
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 10px;
+        padding: 6px 12px;
         border-radius: 999px;
-        background: var(--panel);
+        background: var(--panel-2);
         border: 1px solid var(--panel-border);
         font-size: 13px;
       }
@@ -53,57 +73,79 @@
         width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
         box-shadow: 0 0 8px rgba(0,0,0,0.4);
       }
-      .status[data-state="live"] .dot { background: var(--ok); box-shadow: 0 0 10px rgba(34,197,94,0.8); }
-      .status[data-state="idle"] .dot { background: var(--warn); box-shadow: 0 0 10px rgba(245,197,66,0.6); }
-      .status[data-state="off"] .dot { background: var(--danger); box-shadow: 0 0 10px rgba(255,91,106,0.6); }
+      .status[data-state="live"] .dot { background: var(--ok); box-shadow: 0 0 12px rgba(40,209,124,0.9); }
+      .status[data-state="idle"] .dot { background: var(--warn); box-shadow: 0 0 12px rgba(242,185,75,0.7); }
+      .status[data-state="off"] .dot { background: var(--danger); box-shadow: 0 0 12px rgba(255,91,106,0.7); }
 
       .controls {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 10px;
-        border-radius: 999px;
+        padding: 8px 12px;
+        border-radius: 14px;
         background: var(--panel);
         border: 1px solid var(--panel-border);
         font-size: 13px;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
       }
       .controls label { color: var(--muted); }
       .controls select {
-        background: #0f1422; color: var(--text); border: 1px solid var(--panel-border);
-        border-radius: 8px; padding: 4px 8px; outline: none;
+        background: rgba(10,14,24,0.9); color: var(--text); border: 1px solid var(--panel-border);
+        border-radius: 10px; padding: 6px 10px; outline: none; min-width: 140px;
       }
       .controls button {
-        background: var(--accent); color: white; border: none; border-radius: 8px;
-        padding: 6px 10px; cursor: pointer; font-weight: 600;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        color: #041018; border: none; border-radius: 10px;
+        padding: 7px 12px; cursor: pointer; font-weight: 700;
+        transition: transform .15s ease, filter .15s ease;
       }
-      .controls button.secondary { background: #2a3147; }
-      .controls button.danger { background: var(--danger); }
-      .controls button:hover { filter: brightness(1.05); }
+      .controls button.secondary { background: #2a3147; color: var(--text); }
+      .controls button.danger { background: var(--danger); color: #160305; }
+      .controls button.audio-stop { background: var(--danger); color: #160305; }
+      .controls button.icon {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 36px; height: 32px; padding: 0; background: #2a3147;
+      }
+      .controls button.icon svg { width: 18px; height: 18px; fill: #e8ecf3; }
+      .controls button.icon.muted svg { fill: var(--danger); }
+      .controls button:hover { filter: brightness(1.05); transform: translateY(-1px); }
+      .controls .audio-status { color: var(--muted); font-size: 12px; font-family: "IBM Plex Mono", monospace; }
 
       .stage { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
-      .stream { max-width: 100vw; max-height: calc(100vh - 64px); border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.45); }
+      .stream {
+        max-width: 96vw; max-height: calc(100vh - 86px);
+        border-radius: 16px; box-shadow: var(--shadow);
+        border: 1px solid rgba(255,255,255,0.08);
+        background: #000;
+      }
 
       #overlay {
         position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
-        color: #fff; background: rgba(0,0,0,0.65); font-size: 20px; font-weight: 600;
-        backdrop-filter: blur(4px);
+        color: #fff; background: rgba(0,0,0,0.7); font-size: 20px; font-weight: 600;
+        backdrop-filter: blur(6px);
       }
       #recBadge {
         display: none; align-items: center; gap: 8px;
-        padding: 6px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; letter-spacing: 0.4px;
-        background: var(--panel); border: 1px solid var(--panel-border);
+        padding: 6px 12px; border-radius: 999px; font-weight: 700; font-size: 12px; letter-spacing: 0.6px;
+        background: var(--panel-2); border: 1px solid var(--panel-border);
       }
       #recDot {
         width: 8px; height: 8px; border-radius: 50%;
-        background: var(--danger); box-shadow: 0 0 10px rgba(255, 91, 106, 0.9);
+        background: var(--danger); box-shadow: 0 0 12px rgba(255, 91, 106, 0.9);
         animation: pulse 1s infinite;
       }
       @keyframes pulse {
         0% { transform: scale(1); opacity: 1; }
-        50% { transform: scale(1.2); opacity: 0.5; }
+        50% { transform: scale(1.25); opacity: 0.55; }
         100% { transform: scale(1); opacity: 1; }
       }
-      #source { color: var(--muted); font-size: 12px; margin-left: 10px; }
+      #source { color: var(--muted); font-size: 12px; margin-left: 10px; font-family: "IBM Plex Mono", monospace; }
+
+      @media (max-width: 980px) {
+        .topbar { grid-template-columns: 1fr; gap: 10px; }
+        .controls { flex-wrap: wrap; justify-content: flex-start; }
+        .stream { max-height: calc(100vh - 160px); }
+      }
     </style>
   </head>
   <body>
@@ -121,6 +163,17 @@
           <label for="screen">Screen</label>
           <select id="screen"></select>
           <button id="switchBtn">Switch</button>
+          <label for="audioDevice">Audio</label>
+          <select id="audioDevice">
+            <option value="">Loading...</option>
+          </select>
+          <button id="audioBtn" class="secondary" onclick="toggleAudio()">Play Audio</button>
+          <button id="audioMute" class="icon" title="Mute" aria-label="Mute" onclick="toggleMute()">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 4.2 9.6 8H6a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h3.6L14 19.8a1 1 0 0 0 1.6-.8V5a1 1 0 0 0-1.6-.8zM18.6 8.2a1 1 0 0 1 1.4 0 5 5 0 0 1 0 7.1 1 1 0 1 1-1.4-1.4 3 3 0 0 0 0-4.2 1 1 0 0 1 0-1.5z"/>
+            </svg>
+          </button>
+          <span id="audioStatus" class="audio-status"></span>
           <button id="recordBtn" class="secondary">Record</button>
           <button id="terminateBtn" class="danger">Terminate</button>
         </div>
@@ -142,6 +195,10 @@
       const recCanvas = document.getElementById('recCanvas');
       const sourceEl = document.getElementById('source');
       const recordBtn = document.getElementById('recordBtn');
+      const audioBtn = document.getElementById('audioBtn');
+      const audioStatus = document.getElementById('audioStatus');
+      const audioSelect = document.getElementById('audioDevice');
+      const audioMuteBtn = document.getElementById('audioMute');
       const urlParams = new URLSearchParams(window.location.search);
       const port = urlParams.get('port') || '40484';
       const baseUrl = 'http://127.0.0.1:' + port;
@@ -188,6 +245,112 @@
       const screenSelect = document.getElementById('screen');
       let screenCount = 0;
 
+      let audioEl = null;
+      let audioPlaying = false;
+      let audioMuted = false;
+      let audioPlayToken = 0;
+      let audioStarting = false;
+
+      function loadAudioDevices() {
+        fetch(`${baseUrl}/audio/devices`)
+          .then(r => r.json())
+          .then(devs => {
+            audioSelect.innerHTML = '';
+            if (!devs.length) {
+              audioSelect.innerHTML = '<option value="">No audio devices</option>';
+              audioStatus.textContent = 'No devices';
+              return;
+            }
+            devs.forEach(d => {
+              const opt = document.createElement('option');
+              opt.value = encodeURIComponent(d.id) + '&type=' + d.type;
+              opt.textContent = (d.type === 'render' ? '[Speaker] ' : '[Mic] ') + d.name;
+              audioSelect.appendChild(opt);
+            });
+            audioSelect.selectedIndex = 0;
+            audioStatus.textContent = 'Ready';
+          })
+          .catch(() => {
+            audioSelect.innerHTML = '<option value="">Audio error</option>';
+            audioStatus.textContent = 'Audio error';
+          });
+      }
+
+      function toggleAudio() {
+        if (audioStarting) {
+          audioPlayToken++;
+          audioStarting = false;
+          if (audioEl) {
+            audioEl.pause();
+            audioEl.src = '';
+            audioEl = null;
+          }
+          audioBtn.textContent = 'Play Audio';
+          audioBtn.classList.remove('audio-stop');
+          audioStatus.textContent = 'Canceled';
+          return;
+        }
+        if (audioPlaying) {
+          audioPlayToken++;
+          if (audioEl) {
+            audioEl.pause();
+            audioEl.src = '';
+            audioEl = null;
+          }
+          audioPlaying = false;
+          audioBtn.textContent = 'Play Audio';
+          audioBtn.classList.remove('audio-stop');
+          audioStatus.textContent = '';
+          audioMuted = false;
+          audioMuteBtn.classList.remove('muted');
+          return;
+        }
+
+        if (!audioSelect.value) {
+          audioStatus.textContent = 'Select a device';
+          return;
+        }
+
+        audioStarting = true;
+        audioStatus.textContent = 'Starting...';
+        const token = ++audioPlayToken;
+        audioEl = new Audio();
+        audioEl.crossOrigin = 'anonymous';
+        audioEl.src = `${baseUrl}/audio?device=${audioSelect.value}`;
+        audioNode = null;
+        audioDest = null;
+        audioEl.muted = audioMuted;
+        audioEl.play()
+          .then(() => {
+            if (token !== audioPlayToken) return;
+            audioStarting = false;
+            audioPlaying = true;
+            audioBtn.textContent = 'Stop Audio';
+            audioBtn.classList.add('audio-stop');
+            audioStatus.textContent = audioMuted ? 'Muted' : 'Playing';
+          })
+          .catch(err => {
+            if (token !== audioPlayToken) return;
+            audioStarting = false;
+            audioStatus.textContent = `Error: ${err.message}`;
+            if (audioEl) {
+              audioEl.pause();
+              audioEl.src = '';
+              audioEl = null;
+            }
+            audioPlaying = false;
+            audioBtn.textContent = 'Play Audio';
+            audioBtn.classList.remove('audio-stop');
+          });
+      }
+
+      function toggleMute() {
+        audioMuted = !audioMuted;
+        if (audioEl) audioEl.muted = audioMuted;
+        audioMuteBtn.classList.toggle('muted', audioMuted);
+        audioStatus.textContent = audioMuted ? 'Muted' : (audioPlaying ? 'Playing' : '');
+      }
+
       function buildScreens(count) {
         screenSelect.innerHTML = '';
         for (let i = 0; i < count; i++) {
@@ -197,6 +360,8 @@
           screenSelect.appendChild(opt);
         }
       }
+
+      loadAudioDevices();
 
       window.__screens = (data) => {
         const count = Number(data && data.count);
@@ -216,6 +381,43 @@
       let recorder = null;
       let recChunks = [];
       let drawTimer = null;
+      let audioCtx = null;
+      let audioNode = null;
+      let audioDest = null;
+
+      function ensureAudioGraph() {
+        if (!audioEl) return null;
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (!audioDest) {
+          audioDest = audioCtx.createMediaStreamDestination();
+        }
+        if (!audioNode) {
+          audioNode = audioCtx.createMediaElementSource(audioEl);
+          audioNode.connect(audioDest);
+          audioNode.connect(audioCtx.destination);
+        }
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+        return audioDest.stream;
+      }
+
+      function buildRecordingStream() {
+        const canvasStream = recCanvas.captureStream(15);
+        if (audioEl && audioPlaying) {
+          try {
+            const audioStream = ensureAudioGraph();
+            if (audioStream) {
+              audioStream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
+            }
+          } catch {
+            // fallback to video-only
+          }
+        }
+        return canvasStream;
+      }
 
       function startRecording() {
         if (recorder) return;
@@ -231,7 +433,7 @@
           }
         }, 1000 / 15);
 
-        const stream = recCanvas.captureStream(15);
+        const stream = buildRecordingStream();
         recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
         recChunks = [];
 
