@@ -1,6 +1,10 @@
-# SpyIt
+# 🕵️ SpyIt
 
-Real-time desktop streaming tool for Windows. Captures the target's screen via DXGI Desktop Duplication and streams it as MJPEG over HTTP. Includes an HTML viewer with screen selection, recording, and remote control. Designed for use with [AdaptixC2](https://github.com/Adaptix-Framework/AdaptixC2) via an AxScript extension.
+**Real-time desktop surveillance over HTTP** — zero dependencies, pure C, single binary.
+
+Captures the target's screen via DXGI Desktop Duplication, encodes frames as JPEG, and streams them as MJPEG over a lightweight HTTP server. View the live feed from any browser. Built for red team ops with native [AdaptixC2](https://github.com/Adaptix-Framework/AdaptixC2) integration — deploy, stream, watch, and clean up in seconds.
+
+> 🎯 *Drop it. Stream it. Watch it. Kill it.*
 
 ## 📁 Project Structure
 
@@ -13,10 +17,10 @@ SpyIt/
 │       ├── compile.bat           # Build Stream.exe (MSVC)
 │       └── enum-screens.axs      # AdaptixC2 AxScript automation
 ├── Enum-Screens/
-│   ├── Step1_Basic_C_usage/
+│   ├── C/
 │   │   ├── enumerate_screens.c   # Simple monitor enumeration
 │   │   └── compile.bat
-│   └── Step2_BOF-Conversion/
+│   └── BOF/
 │       ├── enumerate_screens.c   # BOF version (BeaconPrintf)
 │       ├── compile.bat
 │       ├── enum-screens.axs      # Adaptix command for BOF
@@ -117,19 +121,19 @@ spyit-terminate svchost.exe 40484
 
 A step-by-step guide to building a Beacon Object File that enumerates display monitors.
 
-### Step 1: Simple C Program
-**`Enum-Screens/Step1_Basic_C_usage/`**
+### Simple C Program
+**`Enum-Screens/C/`**
 
 Standalone EXE that uses `EnumDisplayMonitors()` and `GetMonitorInfo()` to list all monitors with resolution and position.
 
 ```cmd
-cd "Enum-Screens\Step1_Basic_C_usage"
+cd "Enum-Screens\C"
 compile.bat
 enumerate_screens.exe
 ```
 
-### Step 2: BOF Conversion
-**`Enum-Screens/Step2_BOF-Conversion/`**
+### BOF Conversion
+**`Enum-Screens/BOF/`**
 
 BOF version using `BeaconPrintf` for output. Builds x64/x86 object files. Load `enum-screens.axs` in AdaptixC2, then run:
 ```
