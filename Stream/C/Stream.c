@@ -12,12 +12,25 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <wincodec.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <wchar.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+
+// PKEY_Device_FriendlyName = {a45c254e-df1c-4efd-8020-67d146a850e0}, 14
+static const PROPERTYKEY PKEY_DevFriendlyName = {
+  { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14
+};
+
+// WASAPI GUIDs (must be defined here; SDK headers only declare them extern)
+DEFINE_GUID(CLSID_MMDeviceEnumerator, 0xbcde0395,0xe52f,0x467c,0x8e,0x3d,0xc4,0x57,0x92,0x91,0x69,0x2e);
+DEFINE_GUID(IID_IMMDeviceEnumerator,  0xa95664d2,0x9614,0x4f35,0xa7,0x46,0xde,0x8d,0xb6,0x36,0x17,0xe6);
+DEFINE_GUID(IID_IAudioClient,         0x1cb9ad4c,0xdbfa,0x4c32,0xb1,0x78,0xc2,0xf5,0x68,0xa7,0x03,0xb2);
+DEFINE_GUID(IID_IAudioCaptureClient,  0xc8adbd64,0xe71e,0x48a0,0xa4,0xde,0x18,0x5c,0x39,0x5c,0xd3,0x17);
 
 #define HR(x) do { HRESULT _hr=(x); if (FAILED(_hr)) { \
   fprintf(stderr, "\nHRESULT 0x%08X at %s:%d\n", (unsigned)_hr, __FILE__, __LINE__); \
@@ -403,10 +416,375 @@ cleanup:
   return hr;
 }
 
+// ---------- Audio helpers ----------
+
+static void handle_audio_devices(SOCKET client) {
+  IMMDeviceEnumerator* enumerator = NULL;
+  IMMDeviceCollection* renderCol = NULL;
+  IMMDeviceCollection* captureCol = NULL;
+  char body[8192];
+  int pos = 0;
+
+  log_line("handle_audio_devices: enter");
+
+  HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
+                                &IID_IMMDeviceEnumerator, (void**)&enumerator);
+  if (FAILED(hr)) {
+    log_line("handle_audio_devices: CoCreateInstance failed 0x%08X", (unsigned)hr);
+    const char* err = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
+    send_all(client, err, (int)strlen(err));
+    return;
+  }
+  log_line("handle_audio_devices: enumerator created");
+
+  pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE, "[");
+
+  // Enumerate render (loopback) devices
+  hr = IMMDeviceEnumerator_EnumAudioEndpoints(enumerator, eRender, DEVICE_STATE_ACTIVE, &renderCol);
+  if (FAILED(hr)) {
+    log_line("handle_audio_devices: render enum failed 0x%08X", (unsigned)hr);
+  }
+  if (SUCCEEDED(hr) && renderCol) {
+    UINT count = 0;
+    IMMDeviceCollection_GetCount(renderCol, &count);
+    log_line("handle_audio_devices: render count=%u", count);
+    for (UINT i = 0; i < count; i++) {
+      IMMDevice* dev = NULL;
+      IMMDeviceCollection_Item(renderCol, i, &dev);
+      if (!dev) continue;
+      LPWSTR id = NULL;
+      IMMDevice_GetId(dev, &id);
+      IPropertyStore* props = NULL;
+      IMMDevice_OpenPropertyStore(dev, STGM_READ, &props);
+      PROPVARIANT name;
+      PropVariantInit(&name);
+      if (props) IPropertyStore_GetValue(props, &PKEY_DevFriendlyName, &name);
+      // Convert wide to UTF-8 for JSON
+      char nameUtf8[256] = {0};
+      char idUtf8[512] = {0};
+      if (name.vt == VT_LPWSTR && name.pwszVal)
+        WideCharToMultiByte(CP_UTF8, 0, name.pwszVal, -1, nameUtf8, sizeof(nameUtf8), NULL, NULL);
+      if (id)
+        WideCharToMultiByte(CP_UTF8, 0, id, -1, idUtf8, sizeof(idUtf8), NULL, NULL);
+      // Escape quotes in name
+      char safeName[512] = {0};
+      int si = 0;
+      for (int j = 0; nameUtf8[j] && si < (int)sizeof(safeName) - 2; j++) {
+        if (nameUtf8[j] == '"' || nameUtf8[j] == '\\') safeName[si++] = '\\';
+        safeName[si++] = nameUtf8[j];
+      }
+      if (pos > 1) pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE, ",");
+      pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE,
+        "{\"id\":\"%s\",\"name\":\"%s\",\"type\":\"render\"}", idUtf8, safeName);
+      PropVariantClear(&name);
+      if (props) IPropertyStore_Release(props);
+      if (id) CoTaskMemFree(id);
+      IMMDevice_Release(dev);
+    }
+    IMMDeviceCollection_Release(renderCol);
+  }
+
+  log_line("handle_audio_devices: render done, enumerating capture");
+
+  // Enumerate capture (mic) devices
+  hr = IMMDeviceEnumerator_EnumAudioEndpoints(enumerator, eCapture, DEVICE_STATE_ACTIVE, &captureCol);
+  if (FAILED(hr)) {
+    log_line("handle_audio_devices: capture enum failed 0x%08X", (unsigned)hr);
+  }
+  if (SUCCEEDED(hr) && captureCol) {
+    UINT count = 0;
+    IMMDeviceCollection_GetCount(captureCol, &count);
+    log_line("handle_audio_devices: capture count=%u", count);
+    for (UINT i = 0; i < count; i++) {
+      IMMDevice* dev = NULL;
+      IMMDeviceCollection_Item(captureCol, i, &dev);
+      if (!dev) continue;
+      LPWSTR id = NULL;
+      IMMDevice_GetId(dev, &id);
+      IPropertyStore* props = NULL;
+      IMMDevice_OpenPropertyStore(dev, STGM_READ, &props);
+      PROPVARIANT name;
+      PropVariantInit(&name);
+      if (props) IPropertyStore_GetValue(props, &PKEY_DevFriendlyName, &name);
+      char nameUtf8[256] = {0};
+      char idUtf8[512] = {0};
+      if (name.vt == VT_LPWSTR && name.pwszVal)
+        WideCharToMultiByte(CP_UTF8, 0, name.pwszVal, -1, nameUtf8, sizeof(nameUtf8), NULL, NULL);
+      if (id)
+        WideCharToMultiByte(CP_UTF8, 0, id, -1, idUtf8, sizeof(idUtf8), NULL, NULL);
+      char safeName[512] = {0};
+      int si = 0;
+      for (int j = 0; nameUtf8[j] && si < (int)sizeof(safeName) - 2; j++) {
+        if (nameUtf8[j] == '"' || nameUtf8[j] == '\\') safeName[si++] = '\\';
+        safeName[si++] = nameUtf8[j];
+      }
+      if (pos > 1) pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE, ",");
+      pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE,
+        "{\"id\":\"%s\",\"name\":\"%s\",\"type\":\"capture\"}", idUtf8, safeName);
+      PropVariantClear(&name);
+      if (props) IPropertyStore_Release(props);
+      if (id) CoTaskMemFree(id);
+      IMMDevice_Release(dev);
+    }
+    IMMDeviceCollection_Release(captureCol);
+  }
+
+  IMMDeviceEnumerator_Release(enumerator);
+  pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE, "]");
+
+  char hdr[256];
+  int hdrLen = _snprintf_s(hdr, sizeof(hdr), _TRUNCATE,
+    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: %d\r\n\r\n", pos);
+  send_all(client, hdr, hdrLen);
+  send_all(client, body, pos);
+}
+
+static void parse_query_string(const char* req, const char* key, char* out, int outSize) {
+  out[0] = 0;
+  const char* p = strstr(req, key);
+  if (!p) return;
+  p += strlen(key);
+  int i = 0;
+  // URL-decode the value (handle %XX)
+  while (*p && *p != ' ' && *p != '&' && *p != '#' && i < outSize - 1) {
+    if (*p == '%' && p[1] && p[2]) {
+      char hex[3] = { p[1], p[2], 0 };
+      out[i++] = (char)strtol(hex, NULL, 16);
+      p += 3;
+    } else {
+      out[i++] = *p++;
+    }
+  }
+  out[i] = 0;
+}
+
+static void handle_audio_stream(SOCKET client, const char* req) {
+  IMMDeviceEnumerator* enumerator = NULL;
+  IMMDevice* device = NULL;
+  IAudioClient* audioClient = NULL;
+  IAudioCaptureClient* captureClient = NULL;
+  WAVEFORMATEX* pwfx = NULL;
+  BOOL isLoopback = FALSE;
+  int logPackets = 0;
+
+  // Parse device= and type= from query
+  char deviceId[512] = {0};
+  char deviceType[32] = {0};
+  parse_query_string(req, "device=", deviceId, sizeof(deviceId));
+  parse_query_string(req, "type=", deviceType, sizeof(deviceType));
+
+  isLoopback = (strcmp(deviceType, "render") == 0);
+  log_line("/audio: start type=%s loopback=%d", deviceType, isLoopback ? 1 : 0);
+
+  HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
+                                &IID_IMMDeviceEnumerator, (void**)&enumerator);
+  if (FAILED(hr)) {
+    log_line("/audio: CoCreateInstance failed 0x%08X", (unsigned)hr);
+    goto audio_done;
+  }
+
+  if (deviceId[0]) {
+    // Convert UTF-8 device ID to wide string
+    wchar_t wId[512] = {0};
+    MultiByteToWideChar(CP_UTF8, 0, deviceId, -1, wId, 512);
+    hr = IMMDeviceEnumerator_GetDevice(enumerator, wId, &device);
+    log_line("/audio: GetDevice hr=0x%08X", (unsigned)hr);
+  } else {
+    // Default render device in loopback
+    hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(enumerator, eRender, eConsole, &device);
+    isLoopback = TRUE;
+    log_line("/audio: GetDefaultAudioEndpoint hr=0x%08X", (unsigned)hr);
+  }
+  if (FAILED(hr) || !device) goto audio_done;
+
+  hr = IMMDevice_Activate(device, &IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&audioClient);
+  if (FAILED(hr)) {
+    log_line("/audio: Activate failed 0x%08X", (unsigned)hr);
+    goto audio_done;
+  }
+
+  hr = IAudioClient_GetMixFormat(audioClient, &pwfx);
+  if (FAILED(hr)) {
+    log_line("/audio: GetMixFormat failed 0x%08X", (unsigned)hr);
+    goto audio_done;
+  }
+  log_line("/audio: mix format tag=0x%X ch=%u rate=%lu bits=%u",
+           pwfx->wFormatTag, pwfx->nChannels, (unsigned long)pwfx->nSamplesPerSec, pwfx->wBitsPerSample);
+
+  // Initialize: loopback for render endpoints, normal for capture endpoints
+  DWORD streamFlags = isLoopback ? AUDCLNT_STREAMFLAGS_LOOPBACK : 0;
+  REFERENCE_TIME bufDuration = 500000; // 50ms buffer
+  hr = IAudioClient_Initialize(audioClient, AUDCLNT_SHAREMODE_SHARED, streamFlags,
+                               bufDuration, 0, pwfx, NULL);
+  if (FAILED(hr)) {
+    log_line("/audio: Initialize failed 0x%08X", (unsigned)hr);
+    goto audio_done;
+  }
+
+  hr = IAudioClient_GetService(audioClient, &IID_IAudioCaptureClient, (void**)&captureClient);
+  if (FAILED(hr)) {
+    log_line("/audio: GetService failed 0x%08X", (unsigned)hr);
+    goto audio_done;
+  }
+
+  hr = IAudioClient_Start(audioClient);
+  if (FAILED(hr)) {
+    log_line("/audio: Start failed 0x%08X", (unsigned)hr);
+    goto audio_done;
+  }
+
+  // Determine output format: 16-bit PCM
+  WORD outChannels = pwfx->nChannels;
+  DWORD outSampleRate = pwfx->nSamplesPerSec;
+  WORD outBitsPerSample = 16;
+  WORD outBlockAlign = outChannels * (outBitsPerSample / 8);
+  DWORD outByteRate = outSampleRate * outBlockAlign;
+
+  // Check if source is float32
+  BOOL srcIsFloat = FALSE;
+  if (pwfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+    srcIsFloat = TRUE;
+  } else if (pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+    WAVEFORMATEXTENSIBLE* wfex = (WAVEFORMATEXTENSIBLE*)pwfx;
+    // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT = {00000003-0000-0010-8000-00aa00389b71}
+    static const GUID KSDATAFORMAT_SUBTYPE_IEEE_FLOAT_local =
+      { 0x00000003, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
+    if (memcmp(&wfex->SubFormat, &KSDATAFORMAT_SUBTYPE_IEEE_FLOAT_local, sizeof(GUID)) == 0)
+      srcIsFloat = TRUE;
+  }
+  WORD srcBytesPerSample = pwfx->wBitsPerSample / 8;
+  WORD srcChannels = pwfx->nChannels;
+
+  // Send HTTP header + WAV header (streaming, infinite length)
+  {
+    // WAV header: 44 bytes with data size = 0xFFFFFFFF (streaming)
+    uint8_t wav[44];
+    uint32_t dataSize = 0xFFFFFFFF;
+    uint32_t riffSize = 36 + dataSize; // will overflow, that's OK
+    memcpy(wav, "RIFF", 4);
+    memcpy(wav + 4, &riffSize, 4);
+    memcpy(wav + 8, "WAVE", 4);
+    memcpy(wav + 12, "fmt ", 4);
+    uint32_t fmtSize = 16;
+    memcpy(wav + 16, &fmtSize, 4);
+    uint16_t audioFmt = 1; // PCM
+    memcpy(wav + 20, &audioFmt, 2);
+    memcpy(wav + 22, &outChannels, 2);
+    memcpy(wav + 24, &outSampleRate, 4);
+    memcpy(wav + 28, &outByteRate, 4);
+    memcpy(wav + 32, &outBlockAlign, 2);
+    memcpy(wav + 34, &outBitsPerSample, 2);
+    memcpy(wav + 36, "data", 4);
+    memcpy(wav + 40, &dataSize, 4);
+
+    char httpHdr[256];
+    int httpHdrLen = _snprintf_s(httpHdr, sizeof(httpHdr), _TRUNCATE,
+      "HTTP/1.1 200 OK\r\n"
+      "Connection: close\r\n"
+      "Content-Type: audio/wav\r\n"
+      "Cache-Control: no-cache\r\n"
+      "Access-Control-Allow-Origin: *\r\n"
+      "Transfer-Encoding: identity\r\n\r\n");
+    if (!send_all(client, httpHdr, httpHdrLen)) goto audio_stop;
+    if (!send_all(client, (const char*)wav, 44)) goto audio_stop;
+  }
+
+  // Stream audio data
+  while (InterlockedCompareExchange(&g_stop, 0, 0) == 0) {
+    Sleep(10); // ~10ms polling
+
+    UINT32 packetLength = 0;
+    hr = IAudioCaptureClient_GetNextPacketSize(captureClient, &packetLength);
+    if (FAILED(hr)) {
+      log_line("/audio: GetNextPacketSize failed 0x%08X", (unsigned)hr);
+      break;
+    }
+
+    while (packetLength > 0) {
+      BYTE* pData = NULL;
+      UINT32 numFrames = 0;
+      DWORD flags = 0;
+
+      hr = IAudioCaptureClient_GetBuffer(captureClient, &pData, &numFrames, &flags, NULL, NULL);
+      if (FAILED(hr)) {
+        log_line("/audio: GetBuffer failed 0x%08X", (unsigned)hr);
+        break;
+      }
+
+      if (logPackets < 5) {
+        log_line("/audio: packet frames=%lu flags=0x%lX", (unsigned long)numFrames, (unsigned long)flags);
+        logPackets++;
+      }
+
+      // Convert to 16-bit PCM and send
+      UINT32 outBytes = numFrames * outBlockAlign;
+      int16_t* outBuf = (int16_t*)HeapAlloc(GetProcessHeap(), 0, outBytes);
+      if (outBuf) {
+        if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+          ZeroMemory(outBuf, outBytes);
+        } else if (srcIsFloat) {
+          // float32 -> int16
+          const float* src = (const float*)pData;
+          for (UINT32 i = 0; i < numFrames * outChannels; i++) {
+            float s = src[i];
+            if (s > 1.0f) s = 1.0f;
+            if (s < -1.0f) s = -1.0f;
+            outBuf[i] = (int16_t)(s * 32767.0f);
+          }
+        } else {
+          // Already PCM, just truncate/copy per sample
+          if (srcBytesPerSample == 2) {
+            memcpy(outBuf, pData, outBytes);
+          } else if (srcBytesPerSample == 4) {
+            // 32-bit int PCM -> 16-bit
+            const int32_t* src = (const int32_t*)pData;
+            for (UINT32 i = 0; i < numFrames * outChannels; i++) {
+              outBuf[i] = (int16_t)(src[i] >> 16);
+            }
+          } else if (srcBytesPerSample == 3) {
+            // 24-bit PCM -> 16-bit
+            const uint8_t* src = pData;
+            for (UINT32 i = 0; i < numFrames * outChannels; i++) {
+              int32_t s = (int32_t)((src[2] << 24) | (src[1] << 16) | (src[0] << 8));
+              outBuf[i] = (int16_t)(s >> 16);
+              src += 3;
+            }
+          }
+        }
+
+        if (!send_all(client, (const char*)outBuf, (int)outBytes)) {
+          HeapFree(GetProcessHeap(), 0, outBuf);
+          IAudioCaptureClient_ReleaseBuffer(captureClient, numFrames);
+          goto audio_stop;
+        }
+        HeapFree(GetProcessHeap(), 0, outBuf);
+      }
+
+      IAudioCaptureClient_ReleaseBuffer(captureClient, numFrames);
+
+      hr = IAudioCaptureClient_GetNextPacketSize(captureClient, &packetLength);
+      if (FAILED(hr)) break;
+    }
+  }
+
+audio_stop:
+  if (audioClient) IAudioClient_Stop(audioClient);
+
+audio_done:
+  log_line("handle_audio_stream: cleanup");
+  if (captureClient) IAudioCaptureClient_Release(captureClient);
+  if (audioClient) IAudioClient_Release(audioClient);
+  if (pwfx) CoTaskMemFree(pwfx);
+  if (device) IMMDevice_Release(device);
+  if (enumerator) IMMDeviceEnumerator_Release(enumerator);
+}
+
 static void handle_http_client(SOCKET client, HttpCtx* ctx) {
   char req[1024] = {0};
   int n = recv(client, req, sizeof(req) - 1, 0);
   if (n <= 0) return;
+
+  log_line("HTTP request: %.60s", req);
 
   if (strncmp(req, "GET /terminate.js", 17) == 0) {
     InterlockedExchange(&g_stop, 1);
@@ -458,12 +836,19 @@ static void handle_http_client(SOCKET client, HttpCtx* ctx) {
                              (int)strlen(body));
     send_all(client, hdr, hdrLen);
     send_all(client, body, (int)strlen(body));
+  } else if (strncmp(req, "GET /audio/devices", 18) == 0) {
+    handle_audio_devices(client);
+  } else if (strncmp(req, "GET /audio", 10) == 0) {
+    handle_audio_stream(client, req);
   } else if (strncmp(req, "GET /stream", 11) == 0) {
     IWICImagingFactory* factory = NULL;
     HDC memdc = NULL;
     HBITMAP dib = NULL;
     uint8_t* dibBits = NULL;
     UINT32 curW = 0, curH = 0;
+    volatile int stream_stage = 0;
+
+    log_line("/stream: begin");
 
     if (FAILED(CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
                                 &IID_IWICImagingFactory, (void**)&factory))) {
@@ -502,19 +887,66 @@ static void handle_http_client(SOCKET client, HttpCtx* ctx) {
       "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
     if (!send_all(client, hdr, (int)strlen(hdr))) goto stream_cleanup;
 
-    while (InterlockedCompareExchange(&g_stop, 0, 0) == 0) {
+    __try {
+      while (InterlockedCompareExchange(&g_stop, 0, 0) == 0) {
       UINT32 w = 0, h = 0;
       RECT desktopRect;
       int fps = 30;
 
+      UINT32 sharedW = 0, sharedH = 0;
+      uint32_t sharedStride = 0;
+
+      stream_stage = 1;
       AcquireSRWLockShared(&ctx->lock);
       w = ctx->w;
       h = ctx->h;
       desktopRect = ctx->desktopRect;
       ReleaseSRWLockShared(&ctx->lock);
 
-      if (w == 0 || h == 0) { Sleep(5); continue; }
+      uint8_t* snapshot = NULL;
+      uint32_t stride = 0;
 
+      stream_stage = 2;
+      AcquireSRWLockShared(&ctx->shared->lock);
+      if (ctx->shared->bgra) {
+        sharedStride = ctx->shared->stride;
+        sharedW = ctx->shared->w;
+        sharedH = ctx->shared->h;
+        if (sharedW > 0 && sharedH > 0) {
+          stride = sharedStride;
+          size_t snapSize = (size_t)stride * (size_t)sharedH;
+          if (stride != 0 && snapSize / stride == sharedH) {
+            snapshot = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, snapSize);
+            if (snapshot) memcpy(snapshot, ctx->shared->bgra, snapSize);
+          } else {
+            log_line("/stream: invalid snapshot size stride=%u h=%u", stride, sharedH);
+          }
+        }
+      }
+      ReleaseSRWLockShared(&ctx->shared->lock);
+
+      if (!snapshot) { Sleep(5); continue; }
+
+      if (sharedW == 0 || sharedH == 0) {
+        HeapFree(GetProcessHeap(), 0, snapshot);
+        Sleep(5);
+        continue;
+      }
+
+      if (sharedW != w || sharedH != h) {
+        log_line("/stream: size mismatch ctx=%ux%u shared=%ux%u", w, h, sharedW, sharedH);
+        w = sharedW;
+        h = sharedH;
+      }
+
+      if (stride < (w * 4)) {
+        log_line("/stream: stride too small stride=%u w=%u", stride, w);
+        HeapFree(GetProcessHeap(), 0, snapshot);
+        Sleep(5);
+        continue;
+      }
+
+      stream_stage = 3;
       if (w != curW || h != curH) {
         if (dib) { DeleteObject(dib); dib = NULL; dibBits = NULL; }
         if (memdc) { DeleteDC(memdc); memdc = NULL; }
@@ -535,62 +967,94 @@ static void handle_http_client(SOCKET client, HttpCtx* ctx) {
             SelectObject(memdc, dib);
             curW = w; curH = h;
           } else {
+            log_line("/stream: CreateDIBSection failed for %ux%u", w, h);
             DeleteDC(memdc);
             memdc = NULL;
           }
+        } else {
+          log_line("/stream: CreateCompatibleDC failed");
         }
       }
-      uint8_t* snapshot = NULL;
-      uint32_t stride = 0;
 
-      AcquireSRWLockShared(&ctx->shared->lock);
-      if (ctx->shared->bgra) {
-        stride = ctx->shared->stride;
-        snapshot = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)stride * h);
-        if (snapshot) memcpy(snapshot, ctx->shared->bgra, (SIZE_T)stride * h);
-      }
-      ReleaseSRWLockShared(&ctx->shared->lock);
-
-      if (!snapshot) { Sleep(5); continue; }
-
+      stream_stage = 4;
       const uint32_t outStride = w * 4;
       uint8_t* temp = dibBits;
+      BOOL tempIsHeap = FALSE;
       if (!temp) {
         temp = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)outStride * h);
-        if (!temp) { HeapFree(GetProcessHeap(), 0, snapshot); break; }
+        if (!temp) {
+          log_line("/stream: temp alloc failed outStride=%u h=%u", outStride, h);
+          HeapFree(GetProcessHeap(), 0, snapshot);
+          break;
+        }
+        tempIsHeap = TRUE;
       }
 
+      stream_stage = 5;
       blit_bgra(temp, outStride, snapshot, stride, w, h, FALSE, FALSE);
 
+      stream_stage = 6;
       if (memdc && dibBits) {
         overlay_cursor_gdi(memdc, w, h, desktopRect);
       }
 
+      stream_stage = 7;
       BYTE* jpg = NULL;
       DWORD jpgSize = 0;
       if (SUCCEEDED(encode_jpeg(factory, temp, w, h, outStride, 75, &jpg, &jpgSize)) && jpg) {
-        char partHdr[256];
-        int hdrLen = _snprintf_s(partHdr, sizeof(partHdr), _TRUNCATE,
-                                 "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %lu\r\n\r\n",
-                                 (unsigned long)jpgSize);
-        if (!send_all(client, partHdr, hdrLen) ||
-            !send_all(client, (const char*)jpg, (int)jpgSize) ||
-            !send_all(client, "\r\n", 2)) {
+        stream_stage = 8;
+        if (jpgSize == 0 || jpgSize > (50u * 1024u * 1024u)) {
+          log_line("/stream: jpg size invalid %lu ptr=%p", (unsigned long)jpgSize, jpg);
           HeapFree(GetProcessHeap(), 0, jpg);
-          HeapFree(GetProcessHeap(), 0, temp);
-          HeapFree(GetProcessHeap(), 0, snapshot);
-          goto stream_cleanup;
+          jpg = NULL;
+        } else {
+          char partHdr[256];
+          int hdrLen = _snprintf_s(partHdr, sizeof(partHdr), _TRUNCATE,
+                                   "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %lu\r\n\r\n",
+                                   (unsigned long)jpgSize);
+          if (hdrLen <= 0) {
+            log_line("/stream: partHdr format failed size=%lu", (unsigned long)jpgSize);
+          } else {
+            stream_stage = 9;
+            if (!send_all(client, partHdr, hdrLen)) {
+              log_line("/stream: send header failed");
+              HeapFree(GetProcessHeap(), 0, jpg);
+              if (tempIsHeap) HeapFree(GetProcessHeap(), 0, temp);
+              HeapFree(GetProcessHeap(), 0, snapshot);
+              goto stream_cleanup;
+            }
+            stream_stage = 10;
+            if (!send_all(client, (const char*)jpg, (int)jpgSize)) {
+              log_line("/stream: send jpg failed size=%lu", (unsigned long)jpgSize);
+              HeapFree(GetProcessHeap(), 0, jpg);
+              if (tempIsHeap) HeapFree(GetProcessHeap(), 0, temp);
+              HeapFree(GetProcessHeap(), 0, snapshot);
+              goto stream_cleanup;
+            }
+            stream_stage = 11;
+            if (!send_all(client, "\r\n", 2)) {
+              log_line("/stream: send tail failed");
+              HeapFree(GetProcessHeap(), 0, jpg);
+              if (tempIsHeap) HeapFree(GetProcessHeap(), 0, temp);
+              HeapFree(GetProcessHeap(), 0, snapshot);
+              goto stream_cleanup;
+            }
+          }
+          HeapFree(GetProcessHeap(), 0, jpg);
+          jpg = NULL;
         }
-        HeapFree(GetProcessHeap(), 0, jpg);
       }
 
-        if (!dibBits) {
+      if (tempIsHeap) {
         HeapFree(GetProcessHeap(), 0, temp);
       }
       HeapFree(GetProcessHeap(), 0, snapshot);
 
       if (fps <= 0) fps = 30;
       Sleep(1000 / fps);
+      }
+    } __except (log_exception(GetExceptionInformation(), "stream_loop")) {
+      log_line("/stream: exception stage=%d", stream_stage);
     }
 
   stream_cleanup:
@@ -602,9 +1066,59 @@ static void handle_http_client(SOCKET client, HttpCtx* ctx) {
       "HTTP/1.1 200 OK\r\n"
       "Content-Type: text/html; charset=utf-8\r\n"
       "Access-Control-Allow-Origin: *\r\n\r\n"
-      "<!doctype html><html><head><meta charset='utf-8'><title>Stream</title></head>"
-      "<body style='margin:0;background:#000;display:flex;align-items:center;justify-content:center;'>"
-      "<img src='/stream' style='max-width:100vw;max-height:100vh;'/>"
+      "<!doctype html><html><head><meta charset='utf-8'><title>Stream</title>"
+      "<style>"
+      "*{margin:0;box-sizing:border-box}"
+      "body{background:#000;display:flex;flex-direction:column;height:100vh}"
+      ".video-wrap{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden}"
+      ".video-wrap img{max-width:100%;max-height:100%}"
+      ".audio-bar{background:rgba(30,30,30,0.92);padding:8px 16px;display:flex;align-items:center;gap:10px;"
+      "font-family:system-ui,sans-serif;font-size:13px;color:#ccc;border-top:1px solid #333}"
+      ".audio-bar select{background:#222;color:#ddd;border:1px solid #555;padding:4px 8px;border-radius:4px;"
+      "font-size:13px;max-width:300px}"
+      ".audio-bar button{background:#2a6;color:#fff;border:none;padding:6px 16px;border-radius:4px;"
+      "cursor:pointer;font-size:13px;font-weight:600;transition:background .15s}"
+      ".audio-bar button:hover{background:#3b7}"
+      ".audio-bar button.stop{background:#c44}"
+      ".audio-bar button.stop:hover{background:#d55}"
+      ".audio-bar .status{font-size:12px;color:#888}"
+      "</style></head>"
+      "<body>"
+      "<div class='video-wrap'><img src='/stream'/></div>"
+      "<div class='audio-bar'>"
+      "<label style='color:#999'>Audio:</label>"
+      "<select id='audioDevice'><option value=''>Loading...</option></select>"
+      "<button id='audioBtn' onclick='toggleAudio()'>Play Audio</button>"
+      "<span class='status' id='audioStatus'></span>"
+      "</div>"
+      "<script>"
+      "var audioEl=null,playing=false;"
+      "fetch('/audio/devices').then(r=>r.json()).then(function(devs){"
+      "  var sel=document.getElementById('audioDevice');"
+      "  sel.innerHTML='';"
+      "  if(!devs.length){sel.innerHTML='<option>No audio devices</option>';return;}"
+      "  devs.forEach(function(d){"
+      "    var o=document.createElement('option');"
+      "    o.value=encodeURIComponent(d.id)+'&type='+d.type;"
+      "    o.textContent=(d.type==='render'?'[Speaker] ':'[Mic] ')+d.name;"
+      "    sel.appendChild(o);"
+      "  });"
+      "}).catch(function(){document.getElementById('audioDevice').innerHTML='<option>Error loading</option>';});"
+      "function toggleAudio(){"
+      "  var btn=document.getElementById('audioBtn');"
+      "  var st=document.getElementById('audioStatus');"
+      "  if(playing){"
+      "    if(audioEl){audioEl.pause();audioEl.src='';audioEl=null;}"
+      "    playing=false;btn.textContent='Play Audio';btn.className='';st.textContent='';"
+      "  }else{"
+      "    var sel=document.getElementById('audioDevice');"
+      "    if(!sel.value)return;"
+      "    audioEl=new Audio('/audio?device='+sel.value);"
+      "    audioEl.play().then(function(){st.textContent='Playing...';}).catch(function(e){st.textContent='Error: '+e.message;});"
+      "    playing=true;btn.textContent='Stop Audio';btn.className='stop';"
+      "  }"
+      "}"
+      "</script>"
       "</body></html>";
     send_all(client, html, (int)strlen(html));
   }

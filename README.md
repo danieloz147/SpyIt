@@ -35,12 +35,16 @@ SpyIt/
 
 **Location:** `Stream/C/`
 
+<video src="Resources/demo.mp4" controls muted loop playsinline style="max-width: 100%; height: auto;"></video>
+
 ### Features
 - DXGI Desktop Duplication for low-overhead screen capture
 - WIC JPEG encoding → MJPEG stream over HTTP
+- System audio + microphone streaming via WASAPI (WAV)
+- Audio device enumeration (render + capture)
 - Mouse cursor overlay (GDI)
 - Multi-monitor support with runtime screen switching
-- HTML viewer with screen selection, record (WebM), and terminate
+- HTML viewer with screen selection, audio controls, record (WebM), and terminate
 - Runs in background (detached process) by default
 - Dynamic port via `--port`
 
@@ -55,7 +59,7 @@ compile.bat
 Stream.exe                          # Default port 40484, background
 Stream.exe --port 8882              # Custom port, background
 Stream.exe --port 8882 --no-detach  # Custom port, keep console
-Stream.exe --logs-enable            # Enable logging to console
+Stream.exe --logs-enable            # Enable logging to stream.log
 ```
 
 ### How to view
@@ -68,16 +72,20 @@ Or navigate directly to:
 http://127.0.0.1:40484/
 ```
 
+The HTML viewer includes audio device selection, play/stop, mute, and recording with audio.
+
 ### HTTP Endpoints
 | Endpoint | Description |
 |---|---|
 | `/` | MJPEG video stream |
+| `/audio/devices` | JSON array of audio devices (render + capture) |
+| `/audio?device=<id>&type=render|capture` | WAV stream from selected device |
 | `/screens.js` | JSONP - number of available screens |
 | `/switch.js?screen=N` | JSONP - switch to screen N |
 | `/terminate.js` | JSONP - stop the server |
 
 ### Dependencies (MSVC)
-`user32.lib` `gdi32.lib` `dxgi.lib` `d3d11.lib` `windowscodecs.lib` `ws2_32.lib` `ole32.lib` `oleaut32.lib`
+`user32.lib` `gdi32.lib` `dxgi.lib` `d3d11.lib` `windowscodecs.lib` `ws2_32.lib` `ole32.lib` `oleaut32.lib` `propsys.lib`
 
 ---
 
