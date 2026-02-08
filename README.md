@@ -35,7 +35,7 @@ SpyIt/
 
 **Location:** `Stream/C/`
 
-<video src="Resources/demo.mp4" controls muted loop playsinline style="max-width: 100%; height: auto;"></video>
+**Demo video:** [Resources/demo.mp4](Resources/demo.mp4)
 
 ### Features
 - DXGI Desktop Duplication for low-overhead screen capture
