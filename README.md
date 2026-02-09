@@ -1,3 +1,10 @@
+> [!WARNING]
+>
+> This project is intended **strictly for educational purposes, security research, and personal investigation**.
+The author **does not support, promote, or condone** any illegal, unethical, or malicious use of this software. 
+**You are solely responsible** for how you use this project and for ensuring full compliance with all applicable laws and regulations.
+
+
 # 🕵️ SpyIt
 
 **Real-time desktop surveillance over HTTP** — zero dependencies, pure C, single binary.
