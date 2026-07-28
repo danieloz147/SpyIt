@@ -5,8 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Live Stream</title>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
       :root {
         --bg: #0a0f1f;
         --bg-2: #0f1b2d;
@@ -26,7 +24,7 @@
       * { box-sizing: border-box; }
       html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: var(--bg); color: var(--text); }
       body {
-        font-family: "Space Grotesk", "Segoe UI", sans-serif;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
         background: radial-gradient(1200px 600px at 10% -10%, #1f3a60 0%, transparent 60%),
                     radial-gradient(900px 500px at 90% 0%, #163a35 0%, transparent 55%),
                     linear-gradient(180deg, var(--bg), var(--bg-2));
@@ -109,7 +107,7 @@
       .controls button.icon svg { width: 18px; height: 18px; fill: #e8ecf3; }
       .controls button.icon.muted svg { fill: var(--danger); }
       .controls button:hover { filter: brightness(1.05); transform: translateY(-1px); }
-      .controls .audio-status { color: var(--muted); font-size: 12px; font-family: "IBM Plex Mono", monospace; }
+      .controls .audio-status { color: var(--muted); font-size: 12px; font-family: "Cascadia Mono", "Consolas", monospace; }
 
       .stage { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
       .stream {
@@ -139,7 +137,7 @@
         50% { transform: scale(1.25); opacity: 0.55; }
         100% { transform: scale(1); opacity: 1; }
       }
-      #source { color: var(--muted); font-size: 12px; margin-left: 10px; font-family: "IBM Plex Mono", monospace; }
+      #source { color: var(--muted); font-size: 12px; margin-left: 10px; font-family: "Cascadia Mono", "Consolas", monospace; }
 
       @media (max-width: 980px) {
         .topbar { grid-template-columns: 1fr; gap: 10px; }

@@ -6,7 +6,6 @@
 #define COBJMACROS
 #define INITGUID
 #include <winsock2.h>
-#include <ws2tcpip.h>
 #include <windows.h>
 #include <initguid.h>
 #include <d3d11.h>
@@ -229,25 +228,12 @@ static void overlay_cursor_gdi(HDC memdc, UINT32 w, UINT32 h, RECT desktopRect) 
 }
 
 static void blit_bgra(uint8_t* dst, uint32_t dstStride, const uint8_t* src, uint32_t srcStride,
-                      uint32_t w, uint32_t h, BOOL rotate180, BOOL mirror) {
+                      uint32_t w, uint32_t h) {
+  const uint32_t rowBytes = w * 4;
   for (uint32_t y = 0; y < h; y++) {
-    const uint32_t srcY = rotate180 ? (h - 1 - y) : y;
-    const uint8_t* srcRow = src + (SIZE_T)srcY * srcStride;
-    uint8_t* dstRow = dst + (SIZE_T)y * dstStride;
-
-    for (uint32_t x = 0; x < w; x++) {
-      uint32_t srcX = rotate180 ? (w - 1 - x) : x;
-      if (mirror) {
-        srcX = (w - 1 - srcX);
-      }
-
-      const uint8_t* p = srcRow + (SIZE_T)srcX * 4;
-      uint8_t* q = dstRow + (SIZE_T)x * 4;
-      q[0] = p[0];
-      q[1] = p[1];
-      q[2] = p[2];
-      q[3] = p[3];
-    }
+    memcpy(dst + (SIZE_T)y * dstStride,
+           src + (SIZE_T)y * srcStride,
+           rowBytes);
   }
 }
 
@@ -418,10 +404,54 @@ cleanup:
 
 // ---------- Audio helpers ----------
 
+static int enum_audio_endpoints(IMMDeviceEnumerator* enumerator, EDataFlow flow,
+                                const char* typeName, char* body, int pos, int bodySize) {
+  IMMDeviceCollection* col = NULL;
+  HRESULT hr = IMMDeviceEnumerator_EnumAudioEndpoints(enumerator, flow, DEVICE_STATE_ACTIVE, &col);
+  if (FAILED(hr)) {
+    log_line("handle_audio_devices: %s enum failed 0x%08X", typeName, (unsigned)hr);
+    return pos;
+  }
+  UINT count = 0;
+  IMMDeviceCollection_GetCount(col, &count);
+  log_line("handle_audio_devices: %s count=%u", typeName, count);
+  for (UINT i = 0; i < count; i++) {
+    IMMDevice* dev = NULL;
+    IMMDeviceCollection_Item(col, i, &dev);
+    if (!dev) continue;
+    LPWSTR id = NULL;
+    IMMDevice_GetId(dev, &id);
+    IPropertyStore* props = NULL;
+    IMMDevice_OpenPropertyStore(dev, STGM_READ, &props);
+    PROPVARIANT name;
+    PropVariantInit(&name);
+    if (props) IPropertyStore_GetValue(props, &PKEY_DevFriendlyName, &name);
+    char nameUtf8[256] = {0};
+    char idUtf8[512] = {0};
+    if (name.vt == VT_LPWSTR && name.pwszVal)
+      WideCharToMultiByte(CP_UTF8, 0, name.pwszVal, -1, nameUtf8, sizeof(nameUtf8), NULL, NULL);
+    if (id)
+      WideCharToMultiByte(CP_UTF8, 0, id, -1, idUtf8, sizeof(idUtf8), NULL, NULL);
+    char safeName[512] = {0};
+    int si = 0;
+    for (int j = 0; nameUtf8[j] && si < (int)sizeof(safeName) - 2; j++) {
+      if (nameUtf8[j] == '"' || nameUtf8[j] == '\\') safeName[si++] = '\\';
+      safeName[si++] = nameUtf8[j];
+    }
+    if (pos > 1) pos += _snprintf_s(body + pos, bodySize - pos, _TRUNCATE, ",");
+    pos += _snprintf_s(body + pos, bodySize - pos, _TRUNCATE,
+      "{\"id\":\"%s\",\"name\":\"%s\",\"type\":\"%s\"}", idUtf8, safeName, typeName);
+    PropVariantClear(&name);
+    if (props) IPropertyStore_Release(props);
+    if (id) CoTaskMemFree(id);
+    IMMDevice_Release(dev);
+  }
+  IMMDeviceCollection_Release(col);
+  return pos;
+}
+
 static void handle_audio_devices(SOCKET client) {
   IMMDeviceEnumerator* enumerator = NULL;
-  IMMDeviceCollection* renderCol = NULL;
-  IMMDeviceCollection* captureCol = NULL;
   char body[8192];
   int pos = 0;
 
@@ -438,96 +468,9 @@ static void handle_audio_devices(SOCKET client) {
   log_line("handle_audio_devices: enumerator created");
 
   pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE, "[");
-
-  // Enumerate render (loopback) devices
-  hr = IMMDeviceEnumerator_EnumAudioEndpoints(enumerator, eRender, DEVICE_STATE_ACTIVE, &renderCol);
-  if (FAILED(hr)) {
-    log_line("handle_audio_devices: render enum failed 0x%08X", (unsigned)hr);
-  }
-  if (SUCCEEDED(hr) && renderCol) {
-    UINT count = 0;
-    IMMDeviceCollection_GetCount(renderCol, &count);
-    log_line("handle_audio_devices: render count=%u", count);
-    for (UINT i = 0; i < count; i++) {
-      IMMDevice* dev = NULL;
-      IMMDeviceCollection_Item(renderCol, i, &dev);
-      if (!dev) continue;
-      LPWSTR id = NULL;
-      IMMDevice_GetId(dev, &id);
-      IPropertyStore* props = NULL;
-      IMMDevice_OpenPropertyStore(dev, STGM_READ, &props);
-      PROPVARIANT name;
-      PropVariantInit(&name);
-      if (props) IPropertyStore_GetValue(props, &PKEY_DevFriendlyName, &name);
-      // Convert wide to UTF-8 for JSON
-      char nameUtf8[256] = {0};
-      char idUtf8[512] = {0};
-      if (name.vt == VT_LPWSTR && name.pwszVal)
-        WideCharToMultiByte(CP_UTF8, 0, name.pwszVal, -1, nameUtf8, sizeof(nameUtf8), NULL, NULL);
-      if (id)
-        WideCharToMultiByte(CP_UTF8, 0, id, -1, idUtf8, sizeof(idUtf8), NULL, NULL);
-      // Escape quotes in name
-      char safeName[512] = {0};
-      int si = 0;
-      for (int j = 0; nameUtf8[j] && si < (int)sizeof(safeName) - 2; j++) {
-        if (nameUtf8[j] == '"' || nameUtf8[j] == '\\') safeName[si++] = '\\';
-        safeName[si++] = nameUtf8[j];
-      }
-      if (pos > 1) pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE, ",");
-      pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE,
-        "{\"id\":\"%s\",\"name\":\"%s\",\"type\":\"render\"}", idUtf8, safeName);
-      PropVariantClear(&name);
-      if (props) IPropertyStore_Release(props);
-      if (id) CoTaskMemFree(id);
-      IMMDevice_Release(dev);
-    }
-    IMMDeviceCollection_Release(renderCol);
-  }
-
+  pos = enum_audio_endpoints(enumerator, eRender, "render", body, pos, sizeof(body));
   log_line("handle_audio_devices: render done, enumerating capture");
-
-  // Enumerate capture (mic) devices
-  hr = IMMDeviceEnumerator_EnumAudioEndpoints(enumerator, eCapture, DEVICE_STATE_ACTIVE, &captureCol);
-  if (FAILED(hr)) {
-    log_line("handle_audio_devices: capture enum failed 0x%08X", (unsigned)hr);
-  }
-  if (SUCCEEDED(hr) && captureCol) {
-    UINT count = 0;
-    IMMDeviceCollection_GetCount(captureCol, &count);
-    log_line("handle_audio_devices: capture count=%u", count);
-    for (UINT i = 0; i < count; i++) {
-      IMMDevice* dev = NULL;
-      IMMDeviceCollection_Item(captureCol, i, &dev);
-      if (!dev) continue;
-      LPWSTR id = NULL;
-      IMMDevice_GetId(dev, &id);
-      IPropertyStore* props = NULL;
-      IMMDevice_OpenPropertyStore(dev, STGM_READ, &props);
-      PROPVARIANT name;
-      PropVariantInit(&name);
-      if (props) IPropertyStore_GetValue(props, &PKEY_DevFriendlyName, &name);
-      char nameUtf8[256] = {0};
-      char idUtf8[512] = {0};
-      if (name.vt == VT_LPWSTR && name.pwszVal)
-        WideCharToMultiByte(CP_UTF8, 0, name.pwszVal, -1, nameUtf8, sizeof(nameUtf8), NULL, NULL);
-      if (id)
-        WideCharToMultiByte(CP_UTF8, 0, id, -1, idUtf8, sizeof(idUtf8), NULL, NULL);
-      char safeName[512] = {0};
-      int si = 0;
-      for (int j = 0; nameUtf8[j] && si < (int)sizeof(safeName) - 2; j++) {
-        if (nameUtf8[j] == '"' || nameUtf8[j] == '\\') safeName[si++] = '\\';
-        safeName[si++] = nameUtf8[j];
-      }
-      if (pos > 1) pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE, ",");
-      pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE,
-        "{\"id\":\"%s\",\"name\":\"%s\",\"type\":\"capture\"}", idUtf8, safeName);
-      PropVariantClear(&name);
-      if (props) IPropertyStore_Release(props);
-      if (id) CoTaskMemFree(id);
-      IMMDevice_Release(dev);
-    }
-    IMMDeviceCollection_Release(captureCol);
-  }
+  pos = enum_audio_endpoints(enumerator, eCapture, "capture", body, pos, sizeof(body));
 
   IMMDeviceEnumerator_Release(enumerator);
   pos += _snprintf_s(body + pos, sizeof(body) - pos, _TRUNCATE, "]");
@@ -991,7 +934,7 @@ static void handle_http_client(SOCKET client, HttpCtx* ctx) {
       }
 
       stream_stage = 5;
-      blit_bgra(temp, outStride, snapshot, stride, w, h, FALSE, FALSE);
+      blit_bgra(temp, outStride, snapshot, stride, w, h);
 
       stream_stage = 6;
       if (memdc && dibBits) {
@@ -1169,8 +1112,6 @@ static DWORD WINAPI http_thread(LPVOID p) {
     if (bind(listenSock, (SOCKADDR*)&addr, sizeof(addr)) == SOCKET_ERROR) goto done;
     if (listen(listenSock, SOMAXCONN) == SOCKET_ERROR) goto done;
   }
-
-  (void)ctx->port;
 
   while (InterlockedCompareExchange(&g_stop, 0, 0) == 0) {
     fd_set set;
@@ -1505,7 +1446,6 @@ int wmain(int argc, wchar_t** argv) {
   HRESULT hr = S_OK;
   int outputIndex = 0;
   int port = 40484;
-  const int fps = 30;
 
   if (relaunch_detached_if_needed(argc, argv)) {
     return 0;
